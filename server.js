@@ -17,6 +17,8 @@ const MongoStorage = connectMongo.create({
     ttl: 600
 })
 const minimist = require('./src/config/minimist')
+const path = require('path')
+const { fork } = require('child_process')
 
 
 app.use(
@@ -161,21 +163,15 @@ app.get('/info', async(req, res) => {
 })
 
 
-function getRandoms(cant) {
-    const numbers = {}
-    for (let i = 0; i < cant; i++) {
-      const tempNum = Math.floor(Math.random() * 999 + 1)
-      numbers[tempNum] = numbers[tempNum] ? numbers[tempNum] + 1 : 1
-    }
-    return numbers
-}
-
-
-app.get('/randoms/:num?', async (req, res) => {
-    const cant = req.params.num || 100000000
-    const numbers = getRandoms(cant)
-    res.json({
-        numbers
+app.get('/randoms', async(req, res) => {
+    const cant = req.query.cant || 100000000
+    const computo = fork(path.resolve(__dirname, './src/fork/getRamdoms.js'))
+    computo.on('message', numbers => {
+        if(numbers === 'listo') {
+        computo.send(cant)
+        } else {
+        res.json({numbers})
+        }
     })
 })
 
