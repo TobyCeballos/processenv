@@ -1,27 +1,24 @@
 const express = require('express')
 const { Server: HttpServer } = require('http')
 const { Server: IOServer } = require('socket.io')
+const Contenedor = require('./src/controllers/contenedorMsg.js')
+const Container = require('./src/controllers/contenedorProd.js')
 const app = express()
 const httpServer = new HttpServer(app)
 const io = new IOServer(httpServer)
+const usersList = require('./src/controllers/contenedorUsers')
 const session = require('express-session')
 const connectMongo = require('connect-mongo')
 const cookieParser = require('cookie-parser')
-const advancedOptions = {useNewUrlParser: true, useUnifiedTopology: true }
+const advancedOptions = { useNewUrlParser: true, useUnifiedTopology: true }
 const MongoStorage = connectMongo.create({
     mongoUrl: 'mongodb+srv://tobyceballos:coderhouse@cluster0.erpbj.mongodb.net/Cluster0?retryWrites=true&w=majority',
     mongoOptions: advancedOptions,
     ttl: 600
 })
-const Contenedor = require('./src/controllers/contenedorMsg.js')
-const Container = require('./src/controllers/contenedorProd.js')
-
-const routes = require('./src/router/routes')
+const minimist = require('./src/config/minimist')
 
 
-app.use(express.static('./src/public'))
-app.set('view engine', 'ejs')
-app.use(cookieParser())
 app.use(
     session({
         store: MongoStorage,
@@ -31,38 +28,156 @@ app.use(
         cookie: {
             maxAge: 60000 * 10
         },
-    }));
+    })
+);
+
+//---------------------------------------------------//
+const passport = require('passport')
+const { Strategy: LocalStrategy } = require('passport-local')
+const { info } = require('console')
+//---------------------------------------------------//
+
+
+
+passport.use('register', new LocalStrategy({
+    usernameField: 'email',
+    passwordField: 'password',
+    passReqToCallback: true
+}, async (req, email, password, done) => {
+    const usuario = await usersList.getUser(email)
+    console.log(usuario)
+    if (usuario) {
+        return done(null, false)
+    } else {
+        const user = req.body.user
+        const saved = await usersList.saveUser({ user, email, password });
+        done(null, saved);
+    }
+}));
+
+passport.use('login', new LocalStrategy({
+    usernameField: 'email',
+    passwordField: 'password',
+    passReqToCallback: true
+}, async (req, email, password, done) => {
+    const user = await usersList.getUser(email);
+    if (user.email != email) {
+        return done(null, false);
+    }
+    if (password != user.password) {
+        return done(null, false);
+    }
+    return done(null, user);
+}));
+passport.serializeUser(function (user, done) {
+    done(null, user);
+});
+
+passport.deserializeUser(function (user, done) {
+    done(null, user);
+});
+
+
+app.use(passport.initialize())
+app.use(passport.session())
+app.set('view engine', 'ejs')
+app.use(cookieParser())
 app.use(express.json())
-app.use(express.urlencoded({ extended: true}))
-app.use((req, res, next) => {
-    req.isAuthenticated = () => {
-        if (req.session.email) {
-            return true
-        }
-        return false
+app.use(express.urlencoded({ extended: true }))
+app.use(express.static('./src/public'))
+
+function isAuth(req, res, next) {
+    if (req.isAuthenticated()) {
+        next()
+    } else {
+        res.redirect('/login')
     }
-    req.logout = done => {
-        req.session.destroy(done)
-    }
-    next()
-})
-//---------------------------------------------------//
-// Verificar Autenticacion
-//---------------------------------------------------//
-app.use((req, res, next) => {
-    req.isAuthenticated = () => {
-        if (req.session.email) {
-            return true
-        }
-        return false
-    }
-    req.logout = done => {
-        req.session.destroy(done)
-    }
-    next()
+}
+
+
+app.get('/register', async (req, res) => {
+    res.render('register')
 })
 
-app.use("/", routes)
+app.post('/register', passport.authenticate('register', { failureRedirect: '/failregister', successRedirect: '/login' }))
+
+app.get('/failregister', async (req, res) => {
+    res.render('register-error')
+})
+
+//---------------------------------------------------//
+// RUTAS LOGIN
+
+app.get('/login', async (req, res) => {
+    res.render('login')
+})
+
+app.post('/login', passport.authenticate('login', { failureRedirect: '/faillogin', successRedirect: '/datos' }))
+
+app.get('/faillogin', async (req, res) => {
+    res.render('login-error')
+})
+
+//---------------------------------------------------//
+// RUTAS DATOS
+
+app.get('/datos', isAuth, async (req, res) => {
+    const user = req.user.user
+    console.log(user)
+    const email = req.user.email
+    const datos = { user, email }
+    res.render('index', {datos})
+})
+
+//---------------------------------------------------//
+// RUTAS LOGOUT
+
+app.get('/logout', async (req, res) => {
+    req.logout(err => {
+        req.session.destroy()
+        res.redirect('/login')
+    })
+})
+
+//---------------------------------------------------//
+// RUTAS INICIO
+
+app.get('/', async(req, res) => {
+    res.redirect('/datos')
+})
+
+//---------------------------------------------------//
+// RUTAS INFO
+
+app.get('/info', async(req, res) => {
+    const processId = process.pid
+    const nodeVersion = process.version
+    const operativeSystem = process.platform
+    const usedMemory = process.memoryUsage().rss
+    const currentPath = process.cwd()
+
+    const info = { processId, nodeVersion, operativeSystem, usedMemory, currentPath }
+    res.render('info', {info})
+})
+
+
+function getRandoms(cant) {
+    const numbers = {}
+    for (let i = 0; i < cant; i++) {
+      const tempNum = Math.floor(Math.random() * 999 + 1)
+      numbers[tempNum] = numbers[tempNum] ? numbers[tempNum] + 1 : 1
+    }
+    return numbers
+}
+
+
+app.get('/randoms/:num?', async (req, res) => {
+    const cant = req.params.num || 100000000
+    const numbers = getRandoms(cant)
+    res.json({
+        numbers
+    })
+})
 
 io.on('connection', async (sockets) => {
     sockets.emit('product', await Container.getProds())
@@ -76,7 +191,9 @@ io.on('connection', async (sockets) => {
         const price = data.price
         const stock = data.stock
         const thumbnail = data.thumbnail
-        await Container.saveProd({name, description, price, stock, thumbnail})
+        await Container.saveProd({ name, description, price, stock, thumbnail })
+
+
         io.sockets.emit('product', await Container.getProds())
     })
     sockets.on('new-message', async dato => {
@@ -96,5 +213,5 @@ io.on('connection', async (sockets) => {
 
 
 
-const PORT = process.env.PORT || 8080
+const PORT = minimist.datosArgs.puerto
 httpServer.listen(PORT, () => console.log('Iniciando en el puerto: ' + PORT))
